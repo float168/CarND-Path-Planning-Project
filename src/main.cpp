@@ -51,13 +51,14 @@ int main() {
     map_waypoints_dy.push_back(d_y);
   }
 
-  auto planner = Planner(map_waypoints_x,
-                         map_waypoints_y,
-                         map_waypoints_s,
-                         map_waypoints_dx,
-                         map_waypoints_dy);
+  const auto waypoints = combineIntoWaypoints(map_waypoints_x,
+                                              map_waypoints_y,
+                                              map_waypoints_s,
+                                              map_waypoints_dx,
+                                              map_waypoints_dy);
+  auto planner = Planner(waypoints);
 
-  h.onMessage([]
+  h.onMessage([&planner]
               (uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
@@ -82,30 +83,34 @@ int main() {
           double car_d = j[1]["d"];
           double car_yaw = j[1]["yaw"];
           double car_speed = j[1]["speed"];
+          const auto car_state = CarState{car_x, car_y, car_s, car_d, car_yaw, car_speed};
 
           // Previous path data given to the Planner
           auto previous_path_x = j[1]["previous_path_x"];
           auto previous_path_y = j[1]["previous_path_y"];
+          const auto previous_path = CartesianPath{previous_path_x, previous_path_y};
+
           // Previous path's end s and d values 
           double end_path_s = j[1]["end_path_s"];
           double end_path_d = j[1]["end_path_d"];
+          const auto end_path = Frenet{end_path_s, end_path_d};
 
           // Sensor Fusion Data, a list of all other cars on the same side 
           //   of the road.
           auto sensor_fusion = j[1]["sensor_fusion"];
+          const auto vehicles = convertSensorFusion(sensor_fusion);
 
           json msgJson;
-
-          vector<double> next_x_vals;
-          vector<double> next_y_vals;
 
           /**
            * TODO: define a path made up of (x,y) points that the car will visit
            *   sequentially every .02 seconds
            */
+          const CartesianPath next_vals = planner.GenerateNextPathPoints(
+              car_state, previous_path, end_path, vehicles);
 
-          msgJson["next_x"] = next_x_vals;
-          msgJson["next_y"] = next_y_vals;
+          msgJson["next_x"] = next_vals.x;
+          msgJson["next_y"] = next_vals.y;
 
           auto msg = "42[\"control\","+ msgJson.dump()+"]";
 
