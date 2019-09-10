@@ -223,7 +223,16 @@ class Planner {
     const CarState& car_state, const CartesianPath& previous_path,
     const Frenet& end_path, const std::vector<Vehicle> vehicles)
   {
-    return CartesianPath{};
+    std::vector<Cartesian> path;
+
+    constexpr double base_step = kMaxSpeed / kBaseMoveTimes;
+    for (int i = 0; i < kBaseMoveTimes; ++i) {
+      const Frenet frenet{car_state.s + i * base_step, car_state.d};
+      const Cartesian next = ToCartesian(frenet, map_waypoints);
+      path.push_back(next);
+    }
+
+    return CartesianPath::fromCartesianVector(path);
   }
 
  private:
