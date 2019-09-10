@@ -79,8 +79,11 @@ struct Vehicle {
 
 
 constexpr double kPI = M_PI;
-inline double deg2rad(double x) { return x * kPI / 180; }
-inline double rad2deg(double x) { return x * 180 / kPI; }
+constexpr double k2PI = 2.0 * kPI;
+constexpr double kPI_2 = 0.5 * kPI;
+
+inline double deg2rad(double x) { return x * kPI / 180.0; }
+inline double rad2deg(double x) { return x * 180.0 / kPI; }
 
 template <typename T, typename U>
 inline double distance(const T& p1, const U& p2) {
@@ -122,11 +125,11 @@ inline std::size_t FindNextWaypointIndex(
   const double heading = atan2((closest_wp.y - headed_point.y),
                                (closest_wp.x - headed_point.x));
   double angle = fabs(headed_point.theta - heading);
-  angle = std::min(2.0 * kPI - angle, angle);
+  angle = std::min(k2PI - angle, angle);
 
   std::size_t next_index = closest_index;
 
-  if (angle > 0.5 * kPI) {
+  if (angle > kPI_2) {
     ++next_index;
     if (next_index == map_waypoints.size()) {
       return 0;
@@ -199,7 +202,7 @@ inline Cartesian ToCartesian(const T& point,
   const double seg_x = prev_wp.x + seg_s * cos(heading);
   const double seg_y = prev_wp.y + seg_s * sin(heading);
 
-  const double perp_heading = heading - 0.5 * kPI;
+  const double perp_heading = heading - kPI_2;
 
   const double x = seg_x + point.d * cos(perp_heading);
   const double y = seg_y + point.d * sin(perp_heading);
