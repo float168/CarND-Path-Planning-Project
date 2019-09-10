@@ -17,7 +17,7 @@ struct CartesianPath {
   std::vector<double> x;
   std::vector<double> y;
 
-  CartesianPath fromCartesianVector(const std::vector<Cartesian>& path) {
+  static CartesianPath fromCartesianVector(const std::vector<Cartesian>& path) {
     const std::size_t N = path.size();
 
     CartesianPath self;
