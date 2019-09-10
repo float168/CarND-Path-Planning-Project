@@ -91,7 +91,7 @@ inline double distance(const T& p1, const U& p2) {
 
 
 template <typename T>
-inline std::size_t GetClosestWaypointIndex(
+inline std::size_t FindClosestWaypointIndex(
   const T& point,
   const std::vector<Waypoint>& map_waypoints)
 {
@@ -112,7 +112,7 @@ inline std::size_t GetClosestWaypointIndex(
 
 // Returns next waypoint of the closest waypoint
 template <typename T>
-inline std::size_t GetNextWaypointIndex(
+inline std::size_t FindNextWaypointIndex(
   const T& headed_point,
   const std::vector<Waypoint>& map_waypoints)
 {
@@ -141,7 +141,7 @@ template <typename T>
 inline Frenet ToFrenet(const T& headed_point,
                        const std::vector<Waypoint>& map_waypoints)
 {
-  const std::size_t next_index = GetNextWaypointIndex(headed_point, map_waypoints);
+  const std::size_t next_index = FindNextWaypointIndex(headed_point, map_waypoints);
   const Waypoint& next_wp = map_waypoints.at(next_index);
 
   const std::size_t prev_index = next_index == 0 ? map_waypoints.size() - 1 : next_index - 1;
