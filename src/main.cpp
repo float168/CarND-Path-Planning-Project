@@ -5,7 +5,6 @@
 #include <vector>
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
-#include "helpers.h"
 #include "json.hpp"
 #include "planner.hpp"
 
@@ -13,6 +12,21 @@
 using nlohmann::json;
 using std::string;
 using std::vector;
+
+// Checks if the SocketIO event has JSON data.
+// If there is data the JSON object in string format will be returned,
+//   else the empty string "" will be returned.
+string hasData(string s) {
+  auto found_null = s.find("null");
+  auto b1 = s.find_first_of("[");
+  auto b2 = s.find_first_of("}");
+  if (found_null != string::npos) {
+    return "";
+  } else if (b1 != string::npos && b2 != string::npos) {
+    return s.substr(b1, b2 - b1 + 2);
+  }
+  return "";
+}
 
 int main() {
   uWS::Hub h;
@@ -51,7 +65,7 @@ int main() {
     map_waypoints_dy.push_back(d_y);
   }
 
-  const auto waypoints = combineIntoWaypoints(map_waypoints_x,
+  const auto waypoints = CombineIntoWaypoints(map_waypoints_x,
                                               map_waypoints_y,
                                               map_waypoints_s,
                                               map_waypoints_dx,
@@ -98,7 +112,7 @@ int main() {
           // Sensor Fusion Data, a list of all other cars on the same side 
           //   of the road.
           auto sensor_fusion = j[1]["sensor_fusion"];
-          const auto vehicles = convertSensorFusion(sensor_fusion);
+          const auto vehicles = ConvertSensorFusion(sensor_fusion);
 
           json msgJson;
 
