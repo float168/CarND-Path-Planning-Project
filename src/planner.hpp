@@ -238,7 +238,7 @@ inline int GetLaneIndex(const double d) {
 
 class Planner {
  public:
-  static constexpr double kMaxSpeed = 25.0;
+  static constexpr double kMaxSpeed = 22.4;
   static constexpr unsigned int kBaseMoveTimes = 50;
   static constexpr double kMaxAccel = 10.0;
   static constexpr double kMaxJerk = 10.0;
