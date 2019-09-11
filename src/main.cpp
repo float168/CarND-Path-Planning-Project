@@ -102,12 +102,12 @@ int main() {
           // Previous path data given to the Planner
           auto previous_path_x = j[1]["previous_path_x"];
           auto previous_path_y = j[1]["previous_path_y"];
-          const auto previous_path = CartesianPath{previous_path_x, previous_path_y}.ToCartesianVector();
+          const auto prev_pts = CartesianPath{previous_path_x, previous_path_y}.ToCartesianVector();
 
           // Previous path's end s and d values 
           double end_path_s = j[1]["end_path_s"];
           double end_path_d = j[1]["end_path_d"];
-          const auto end_path = Frenet{end_path_s, end_path_d};
+          const auto end_pt = Frenet{end_path_s, end_path_d};
 
           // Sensor Fusion Data, a list of all other cars on the same side 
           //   of the road.
@@ -121,7 +121,7 @@ int main() {
            *   sequentially every .02 seconds
            */
           const CartesianPath next_vals = planner.GenerateNextPathPoints(
-              car_state, previous_path, end_path, vehicles);
+              car_state, prev_pts, end_pt, vehicles);
 
           msgJson["next_x"] = next_vals.x;
           msgJson["next_y"] = next_vals.y;

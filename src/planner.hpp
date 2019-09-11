@@ -264,24 +264,26 @@ class Planner {
     : map_waypoints(map_waypoints)
   {}
 
-  CartesianPath GenerateNextPathPoints(
-    const CarState& car_state, const std::vector<Cartesian>& previous_path,
-    const Frenet& end_path, const std::vector<Vehicle> vehicles)
+  CartesianPath
+  GenerateNextPathPoints(const CarState& car_state,
+                         const std::vector<Cartesian>& prev_pts,
+                         const Frenet& end_pt,
+                         const std::vector<Vehicle> vehicles)
   {
-    const std::size_t prev_size = previous_path.size();
+    const std::size_t prev_size = prev_pts.size();
 
 #ifdef DEBUG
     std::cout << "  yaw: " << car_state.yaw << std::endl;
 #endif
 
     // Check other vehicles closeness
-    HaveCloseVehicles close = CheckVehiclesCloseness(end_path, vehicles, prev_size);
+    HaveCloseVehicles close = CheckVehiclesCloseness(end_pt, vehicles, prev_size);
 
     // TODO: make decision on behavior
     intend_lane_index = GetLaneIndex(car_state.d);
 
     HeadedCartesian ref;
-    std::vector<Cartesian> sparse_pts = GenerateSparsePoints(car_state, previous_path, end_path, ref);
+    std::vector<Cartesian> sparse_pts = GenerateSparsePoints(car_state, prev_pts, end_pt, ref);
 
     // Shift to car coordinates
     for (auto& p : sparse_pts) {
@@ -295,7 +297,7 @@ class Planner {
     spline.set_points(sparse_path.x, sparse_path.y);
 
     std::vector<Cartesian> next_pts(kPathPointNum);
-    std::copy(previous_path.begin(), previous_path.end(), next_pts.begin());
+    std::copy(prev_pts.begin(), prev_pts.end(), next_pts.begin());
 
     std::vector<Cartesian> extend_pts = GenerateInterporated(spline, ref, kPathPointNum - prev_size);
     std::copy(extend_pts.begin(), extend_pts.end(), next_pts.begin() + prev_size);
@@ -309,12 +311,12 @@ class Planner {
   double intend_speed = kMaxSpeed;
 
   HaveCloseVehicles
-  CheckVehiclesCloseness(const Frenet& end_path,
+  CheckVehiclesCloseness(const Frenet& end_pt,
                          const std::vector<Vehicle>& vehicles,
                          const std::size_t prev_size) const
   {
-    const int pred_car_lane_i = GetLaneIndex(end_path.d);
-    const int pred_car_s = end_path.s;
+    const int pred_car_lane_i = GetLaneIndex(end_pt.d);
+    const int pred_car_s = end_pt.s;
 
     const double diff_sec = static_cast<double>(prev_size) / kBaseMoveTimes;
 
@@ -340,12 +342,13 @@ class Planner {
     return close;
   }
 
-  std::vector<Cartesian> GenerateSparsePoints(const CarState car,
-                                              const std::vector<Cartesian>& prev_path,
-                                              const Frenet& end_path,
-                                              HeadedCartesian& ref)
+  std::vector<Cartesian>
+  GenerateSparsePoints(const CarState car,
+                       const std::vector<Cartesian>& prev_pts,
+                       const Frenet& end_pt,
+                       HeadedCartesian& ref)
   {
-    const std::size_t prev_size = prev_path.size();
+    const std::size_t prev_size = prev_pts.size();
     ref = {car.x, car.y, deg2rad(car.yaw)};
 
     std::vector<Cartesian> sparse_pts;
@@ -355,18 +358,18 @@ class Planner {
       sparse_pts.push_back(prev_car_pos);
       sparse_pts.push_back({ref.x, ref.y});
     } else {
-      const auto cart_end_path = prev_path.at(prev_size - 1);
-      ref.x = cart_end_path.x;
-      ref.y = cart_end_path.y;
+      const auto cart_end_pt = prev_pts.at(prev_size - 1);
+      ref.x = cart_end_pt.x;
+      ref.y = cart_end_pt.y;
 
-      const auto ref_prev = prev_path.at(prev_size - 2);
+      const auto ref_prev = prev_pts.at(prev_size - 2);
       ref.theta = atan2(ref.y - ref_prev.y, ref.x - ref_prev.x);
 
       sparse_pts.push_back(ref_prev);
       sparse_pts.push_back({ref.x, ref.y});
     }
 
-    const double s = prev_size > 0 ? end_path.s : car.s;
+    const double s = prev_size > 0 ? end_pt.s : car.s;
 
     for (int i = 0; i < 3; ++i) {
       const Frenet fren_wp{s + (i+1) * 30.0, GetLaneMid(intend_lane_index)};
@@ -377,9 +380,10 @@ class Planner {
     return sparse_pts;
   }
 
-  std::vector<Cartesian> GenerateInterporated(tk::spline& spline,
-                                              const HeadedCartesian& ref,
-                                              const std::size_t point_num)
+  std::vector<Cartesian>
+  GenerateInterporated(tk::spline& spline,
+                       const HeadedCartesian& ref,
+                       const std::size_t point_num)
   {
     std::vector<Cartesian> points(point_num);
 
