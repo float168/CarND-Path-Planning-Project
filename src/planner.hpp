@@ -2,10 +2,14 @@
 
 #include <vector>
 #include <array>
-#include <iostream>
 #include <limits>
+#include <algorithm>
+#include <iostream>
+#include <iomanip>
 
 #include <cmath>
+
+#include "spline.h"
 
 
 constexpr double kLaneWidth = 4.0;
@@ -235,15 +239,26 @@ inline int GetLaneIndex(const double d) {
   return static_cast<int>(d / kLaneWidth);
 }
 
+inline double GetLaneMid(const int i) {
+  return i * kLaneWidth + 0.5 * kLaneWidth;
+}
+
 
 class Planner {
+  struct HaveCloseVehicles {
+    bool on_ahead = false;
+    bool on_left  = false;
+    bool on_right = false;
+  };
+
  public:
-  static constexpr double kMaxSpeed = 22.4;
+  static constexpr double kMaxSpeed = 22.2;
   static constexpr unsigned int kBaseMoveTimes = 50;
   static constexpr double kMaxAccel = 10.0;
   static constexpr double kMaxJerk = 10.0;
 
-  static constexpr double kCloseDistance = 50.0;
+  static constexpr double kCloseDistance = 20.0;
+  static constexpr std::size_t kPathPointNum = 50;
 
   Planner(const std::vector<Waypoint>& map_waypoints)
     : map_waypoints(map_waypoints)
@@ -253,64 +268,136 @@ class Planner {
     const CarState& car_state, const std::vector<Cartesian>& previous_path,
     const Frenet& end_path, const std::vector<Vehicle> vehicles)
   {
-    const std::size_t diff_times = previous_path.size();
-    const double diff_sec = static_cast<double>(diff_times) / kBaseMoveTimes;
+    const std::size_t prev_size = previous_path.size();
 
-    // Update car state based on previous path
-    CarState cur_car_state = car_state;
-    if (previous_path.size() > 0) {
-      const auto end_cart_path = previous_path.at(previous_path.size() - 1);
-      cur_car_state.x = end_cart_path.x;
-      cur_car_state.y = end_cart_path.y;
-      cur_car_state.s = end_path.s;
-      cur_car_state.d = end_path.d;
-    }
-
-    const bool cur_car_lane_i = GetLaneIndex(cur_car_state.d);
+#ifdef DEBUG
+    std::cout << "  yaw: " << car_state.yaw << std::endl;
+#endif
 
     // Check other vehicles closeness
-    bool has_ahead_veh = false;
-    bool has_left_veh  = false;
-    bool has_right_veh = false;
+    HaveCloseVehicles close = CheckVehiclesCloseness(end_path, vehicles, prev_size);
 
+    // TODO: make decision on behavior
+    intend_lane_index = GetLaneIndex(car_state.d);
+
+    HeadedCartesian ref;
+    std::vector<Cartesian> sparse_pts = GenerateSparsePoints(car_state, previous_path, end_path, ref);
+
+    // Shift to car coordinates
+    for (auto& p : sparse_pts) {
+      const Cartesian shift{p.x - ref.x, p.y - ref.y};
+      p = {shift.x * cos(-ref.theta) - shift.y * sin(-ref.theta),
+           shift.x * sin(-ref.theta) + shift.y * cos(-ref.theta)};
+    }
+    const auto sparse_path = CartesianPath::fromCartesianVector(sparse_pts);
+
+    tk::spline spline;
+    spline.set_points(sparse_path.x, sparse_path.y);
+
+    std::vector<Cartesian> next_pts(kPathPointNum);
+    std::copy(previous_path.begin(), previous_path.end(), next_pts.begin());
+
+    std::vector<Cartesian> extend_pts = GenerateInterporated(spline, ref, kPathPointNum - prev_size);
+    std::copy(extend_pts.begin(), extend_pts.end(), next_pts.begin() + prev_size);
+
+    return CartesianPath::fromCartesianVector(next_pts);
+  }
+
+ private:
+  const std::vector<Waypoint> map_waypoints;
+  int intend_lane_index = -1;
+  double intend_speed = kMaxSpeed;
+
+  HaveCloseVehicles
+  CheckVehiclesCloseness(const Frenet& end_path,
+                         const std::vector<Vehicle>& vehicles,
+                         const std::size_t prev_size) const
+  {
+    const int pred_car_lane_i = GetLaneIndex(end_path.d);
+    const int pred_car_s = end_path.s;
+
+    const double diff_sec = static_cast<double>(prev_size) / kBaseMoveTimes;
+
+    HaveCloseVehicles close;
     for (const auto veh : vehicles) {
-      const double cur_veh_s = veh.s + norm(Cartesian{veh.vx, veh.vy}) * diff_sec;
-      const bool is_close = std::abs(cur_veh_s - cur_car_state.s) <= kCloseDistance;
+      const double pred_veh_s = veh.s + norm(Cartesian{veh.vx, veh.vy}) * diff_sec;
+      const bool is_close = std::abs(pred_veh_s - pred_car_s) <= kCloseDistance;
 
       const int veh_lane_i = GetLaneIndex(veh.d);
       if (veh_lane_i < 0) { continue; }
 
       if (is_close) {
-        if (veh_lane_i == cur_car_lane_i) {
-          has_ahead_veh = true;
-        } else if (veh_lane_i == cur_car_lane_i - 1) {
-          has_left_veh = true;
-        } else if (veh_lane_i == cur_car_lane_i + 1) {
-          has_right_veh = true;
+        if (veh_lane_i == pred_car_lane_i) {
+          close.on_ahead = true;
+        } else if (veh_lane_i == pred_car_lane_i - 1) {
+          close.on_left = true;
+        } else if (veh_lane_i == pred_car_lane_i + 1) {
+          close.on_right = true;
         }
       }
     }
 
-#ifdef DEBUG
-    std::cout << "on ahead: " << has_ahead_veh
-              << ", on left: " << has_left_veh
-              << ", on right: " << has_right_veh << std::endl;
-#endif
-
-    std::vector<Cartesian> path;
-
-    constexpr double base_step = kMaxSpeed / kBaseMoveTimes;
-    for (int i = 0; i < kBaseMoveTimes; ++i) {
-      const Frenet frenet{car_state.s + i * base_step, car_state.d};
-      const Cartesian next = ToCartesian(frenet, map_waypoints);
-      path.push_back(next);
-    }
-
-    return CartesianPath::fromCartesianVector(path);
+    return close;
   }
 
- private:
-  const std::vector<Waypoint> map_waypoints;
+  std::vector<Cartesian> GenerateSparsePoints(const CarState car,
+                                              const std::vector<Cartesian>& prev_path,
+                                              const Frenet& end_path,
+                                              HeadedCartesian& ref)
+  {
+    const std::size_t prev_size = prev_path.size();
+    ref = {car.x, car.y, deg2rad(car.yaw)};
+
+    std::vector<Cartesian> sparse_pts;
+    if (prev_size < 2) {
+      const Cartesian prev_car_pos{ref.x - cos(ref.theta),
+                                   ref.y - sin(ref.theta)};
+      sparse_pts.push_back(prev_car_pos);
+      sparse_pts.push_back({ref.x, ref.y});
+    } else {
+      const auto cart_end_path = prev_path.at(prev_size - 1);
+      ref.x = cart_end_path.x;
+      ref.y = cart_end_path.y;
+
+      const auto ref_prev = prev_path.at(prev_size - 2);
+      ref.theta = atan2(ref.y - ref_prev.y, ref.x - ref_prev.x);
+
+      sparse_pts.push_back(ref_prev);
+      sparse_pts.push_back({ref.x, ref.y});
+    }
+
+    const double s = prev_size > 0 ? end_path.s : car.s;
+
+    for (int i = 0; i < 3; ++i) {
+      const Frenet fren_wp{s + (i+1) * 30.0, GetLaneMid(intend_lane_index)};
+      const Cartesian cart_wp = ToCartesian(fren_wp, map_waypoints);
+      sparse_pts.push_back(cart_wp);
+    }
+
+    return sparse_pts;
+  }
+
+  std::vector<Cartesian> GenerateInterporated(tk::spline& spline,
+                                              const HeadedCartesian& ref,
+                                              const std::size_t point_num)
+  {
+    std::vector<Cartesian> points(point_num);
+
+    static constexpr double step = 30.0;
+    const Cartesian target{step, spline(step)};
+    const double target_dist = norm(target);
+      const double N = target_dist / intend_speed * kBaseMoveTimes;
+
+    for (std::size_t i = 0; i < point_num; ++i) {
+      const double x = (i+1) * target.x / N;
+      const Cartesian p_r = {x, spline(x)};
+      const Cartesian p = {ref.x + p_r.x * cos(ref.theta) - p_r.y * sin(ref.theta),
+                           ref.y + p_r.x * sin(ref.theta) + p_r.y * cos(ref.theta)};
+      points.at(i) = p;
+    }
+
+    return points;
+  }
 };
 
 
