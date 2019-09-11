@@ -8,6 +8,9 @@
 #include <cmath>
 
 
+constexpr double kLaneWidth = 4.0;
+constexpr unsigned int kLaneNum = 3;
+
 struct Cartesian {
   double x;
   double y;
@@ -31,6 +34,18 @@ struct CartesianPath {
     }
 
     return self;
+  }
+
+  std::vector<Cartesian> ToCartesianVector() const {
+    const std::size_t N = x.size();
+
+    std::vector<Cartesian> vec(N);
+
+    for (std::size_t i = 0; i < N; ++i) {
+      vec.at(i) = {x.at(i), y.at(i)};
+    }
+
+    return vec;
   }
 };
 
@@ -85,11 +100,16 @@ constexpr double kPI_2 = 0.5 * kPI;
 inline double deg2rad(double x) { return x * kPI / 180.0; }
 inline double rad2deg(double x) { return x * 180.0 / kPI; }
 
+template <typename T>
+inline double norm(const T& p) {
+  return sqrt(p.x * p.x + p.y * p.y);
+}
+
 template <typename T, typename U>
 inline double distance(const T& p1, const U& p2) {
   const double dx = p1.x - p2.x;
   const double dy = p1.y - p2.y;
-  return sqrt(dx * dx + dy * dy);
+  return norm(Cartesian{dx, dy});
 }
 
 
@@ -210,6 +230,11 @@ inline Cartesian ToCartesian(const T& point,
   return {x, y};
 }
 
+inline int GetLaneIndex(const double d) {
+  if (d < 0.0 || d >= kLaneWidth * kLaneNum) { return -1; }
+  return static_cast<int>(d / kLaneWidth);
+}
+
 
 class Planner {
  public:
@@ -218,14 +243,60 @@ class Planner {
   static constexpr double kMaxAccel = 10.0;
   static constexpr double kMaxJerk = 10.0;
 
+  static constexpr double kCloseDistance = 50.0;
+
   Planner(const std::vector<Waypoint>& map_waypoints)
     : map_waypoints(map_waypoints)
   {}
 
   CartesianPath GenerateNextPathPoints(
-    const CarState& car_state, const CartesianPath& previous_path,
+    const CarState& car_state, const std::vector<Cartesian>& previous_path,
     const Frenet& end_path, const std::vector<Vehicle> vehicles)
   {
+    const std::size_t diff_times = previous_path.size();
+    const double diff_sec = static_cast<double>(diff_times) / kBaseMoveTimes;
+
+    // Update car state based on previous path
+    CarState cur_car_state = car_state;
+    if (previous_path.size() > 0) {
+      const auto end_cart_path = previous_path.at(previous_path.size() - 1);
+      cur_car_state.x = end_cart_path.x;
+      cur_car_state.y = end_cart_path.y;
+      cur_car_state.s = end_path.s;
+      cur_car_state.d = end_path.d;
+    }
+
+    const bool cur_car_lane_i = GetLaneIndex(cur_car_state.d);
+
+    // Check other vehicles closeness
+    bool has_ahead_veh = false;
+    bool has_left_veh  = false;
+    bool has_right_veh = false;
+
+    for (const auto veh : vehicles) {
+      const double cur_veh_s = veh.s + norm(Cartesian{veh.vx, veh.vy}) * diff_sec;
+      const bool is_close = std::abs(cur_veh_s - cur_car_state.s) <= kCloseDistance;
+
+      const int veh_lane_i = GetLaneIndex(veh.d);
+      if (veh_lane_i < 0) { continue; }
+
+      if (is_close) {
+        if (veh_lane_i == cur_car_lane_i) {
+          has_ahead_veh = true;
+        } else if (veh_lane_i == cur_car_lane_i - 1) {
+          has_left_veh = true;
+        } else if (veh_lane_i == cur_car_lane_i + 1) {
+          has_right_veh = true;
+        }
+      }
+    }
+
+#ifdef DEBUG
+    std::cout << "on ahead: " << has_ahead_veh
+              << ", on left: " << has_left_veh
+              << ", on right: " << has_right_veh << std::endl;
+#endif
+
     std::vector<Cartesian> path;
 
     constexpr double base_step = kMaxSpeed / kBaseMoveTimes;
