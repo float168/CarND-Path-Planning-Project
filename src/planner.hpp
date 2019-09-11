@@ -254,14 +254,13 @@ class Planner {
  public:
   static constexpr unsigned int kBaseMoveTimes = 50; // [/s]
   static constexpr double kMaxSpeed = 22.2;          // [meter/s]
-  static constexpr double kMaxAccel = 10.0;          // [meter/s^2]
-  static constexpr double kMaxJerk = 10.0;           // [meter/s^3]
+  static constexpr double kMaxAccel = 0.06;          // [meter/s^2]
 
-  static constexpr double kCloseDistance = 20.0;
+  static constexpr double kCloseDistance = 30.0;
   static constexpr std::size_t kPathPointNum = 50;
 
   Planner(const std::vector<Waypoint>& map_waypoints)
-    : map_waypoints(map_waypoints)
+    : m_map_waypoints(map_waypoints)
   {}
 
   CartesianPath
@@ -272,15 +271,28 @@ class Planner {
   {
     const std::size_t prev_size = prev_pts.size();
 
-#ifdef DEBUG
-    std::cout << "  yaw: " << car_state.yaw << std::endl;
-#endif
-
     // Check other vehicles closeness
     HaveCloseVehicles close = CheckVehiclesCloseness(end_pt, vehicles, prev_size);
 
-    // TODO: make decision on behavior
-    intend_lane_index = GetLaneIndex(car_state.d);
+#ifdef DEBUG
+    std::cout << "  [close] ahead: " << close.on_ahead
+      << ", left: " << close.on_left
+      << ", right: " << close.on_right
+      << std::endl;
+#endif
+
+    const int lane_index = GetLaneIndex(car_state.d);
+    if (m_intend_lane_index == -1) {
+      m_intend_lane_index = lane_index;
+    }
+
+    const double accel = DecideLaneAndAccel(close);
+
+#ifdef DEBUG
+    std::cout << "  [decide] accel: " << accel
+      << ", to lane: " << m_intend_lane_index
+      << std::endl;
+#endif
 
     HeadedCartesian ref;
     std::vector<Cartesian> sparse_pts = GenerateSparsePoints(car_state, prev_pts, end_pt, ref);
@@ -299,16 +311,16 @@ class Planner {
     std::vector<Cartesian> next_pts(kPathPointNum);
     std::copy(prev_pts.begin(), prev_pts.end(), next_pts.begin());
 
-    std::vector<Cartesian> extend_pts = GenerateInterporated(spline, ref, kPathPointNum - prev_size);
+    std::vector<Cartesian> extend_pts = GenerateInterporated(spline, ref, accel, kPathPointNum - prev_size);
     std::copy(extend_pts.begin(), extend_pts.end(), next_pts.begin() + prev_size);
 
     return CartesianPath::fromCartesianVector(next_pts);
   }
 
  private:
-  const std::vector<Waypoint> map_waypoints;
-  int intend_lane_index = -1;
-  double intend_speed = kMaxSpeed;
+  const std::vector<Waypoint> m_map_waypoints;
+  int m_intend_lane_index = -1;
+  double m_intend_speed = 0.0;
 
   HaveCloseVehicles
   CheckVehiclesCloseness(const Frenet& end_pt,
@@ -323,15 +335,17 @@ class Planner {
     HaveCloseVehicles close;
     for (const auto veh : vehicles) {
       const double pred_veh_s = veh.s + norm(Cartesian{veh.vx, veh.vy}) * diff_sec;
-      const bool is_close = std::abs(pred_veh_s - pred_car_s) <= kCloseDistance;
 
       const int veh_lane_i = GetLaneIndex(veh.d);
       if (veh_lane_i < 0) { continue; }
 
-      if (is_close) {
-        if (veh_lane_i == pred_car_lane_i) {
+      const double diff_s = pred_veh_s - pred_car_s;
+      if (veh_lane_i == pred_car_lane_i) {
+        if (0 < diff_s && diff_s <= kCloseDistance) {
           close.on_ahead = true;
-        } else if (veh_lane_i == pred_car_lane_i - 1) {
+        }
+      } else if (std::abs(diff_s) <= kCloseDistance) {
+        if (veh_lane_i == pred_car_lane_i - 1) {
           close.on_left = true;
         } else if (veh_lane_i == pred_car_lane_i + 1) {
           close.on_right = true;
@@ -342,11 +356,36 @@ class Planner {
     return close;
   }
 
+  double DecideLaneAndAccel(const HaveCloseVehicles& close) {
+    double accel = 0.0;
+
+    if (close.on_ahead) {
+      if (m_intend_lane_index > 0 && !close.on_left) {
+        m_intend_lane_index--;
+      } else if (m_intend_lane_index < kLaneNum - 1 && !close.on_right) {
+        m_intend_lane_index++;
+      } else {
+        accel = -kMaxAccel;
+      }
+    } else {
+      if (m_intend_lane_index == 0 && !close.on_right) {
+        m_intend_lane_index++;
+      } else if (m_intend_lane_index == kLaneNum - 1 && !close.on_left) {
+        m_intend_lane_index--;
+      }
+      if (m_intend_speed < kMaxSpeed) {
+        accel = kMaxAccel;
+      }
+    }
+
+    return accel;
+  }
+
   std::vector<Cartesian>
   GenerateSparsePoints(const CarState car,
                        const std::vector<Cartesian>& prev_pts,
                        const Frenet& end_pt,
-                       HeadedCartesian& ref)
+                       HeadedCartesian& ref) const
   {
     const std::size_t prev_size = prev_pts.size();
     ref = {car.x, car.y, deg2rad(car.yaw)};
@@ -372,8 +411,8 @@ class Planner {
     const double s = prev_size > 0 ? end_pt.s : car.s;
 
     for (int i = 0; i < 3; ++i) {
-      const Frenet fren_wp{s + (i+1) * 30.0, GetLaneMid(intend_lane_index)};
-      const Cartesian cart_wp = ToCartesian(fren_wp, map_waypoints);
+      const Frenet fren_wp{s + (i+1) * 30.0, GetLaneMid(m_intend_lane_index)};
+      const Cartesian cart_wp = ToCartesian(fren_wp, m_map_waypoints);
       sparse_pts.push_back(cart_wp);
     }
 
@@ -383,6 +422,7 @@ class Planner {
   std::vector<Cartesian>
   GenerateInterporated(tk::spline& spline,
                        const HeadedCartesian& ref,
+                       const double accel,
                        const std::size_t point_num)
   {
     std::vector<Cartesian> points(point_num);
@@ -390,9 +430,19 @@ class Planner {
     static constexpr double step = 30.0;
     const Cartesian target{step, spline(step)};
     const double target_dist = norm(target);
-      const double N = target_dist / intend_speed * kBaseMoveTimes;
 
     for (std::size_t i = 0; i < point_num; ++i) {
+      m_intend_speed += accel;
+      if (m_intend_speed > kMaxSpeed) { m_intend_speed = kMaxSpeed; }
+      if (m_intend_speed < kMaxAccel) { m_intend_speed = kMaxAccel; }
+
+#ifdef DEBUG
+    std::cout << "  [interporate] to speed: " << m_intend_speed
+      << std::endl;
+#endif
+
+      const double N = target_dist / m_intend_speed * kBaseMoveTimes;
+
       const double x = (i+1) * target.x / N;
       const Cartesian p_r = {x, spline(x)};
       const Cartesian p = {ref.x + p_r.x * cos(ref.theta) - p_r.y * sin(ref.theta),
