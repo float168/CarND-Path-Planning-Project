@@ -252,10 +252,10 @@ class Planner {
   };
 
  public:
-  static constexpr double kMaxSpeed = 22.2;
-  static constexpr unsigned int kBaseMoveTimes = 50;
-  static constexpr double kMaxAccel = 10.0;
-  static constexpr double kMaxJerk = 10.0;
+  static constexpr unsigned int kBaseMoveTimes = 50; // [/s]
+  static constexpr double kMaxSpeed = 22.2;          // [meter/s]
+  static constexpr double kMaxAccel = 10.0;          // [meter/s^2]
+  static constexpr double kMaxJerk = 10.0;           // [meter/s^3]
 
   static constexpr double kCloseDistance = 20.0;
   static constexpr std::size_t kPathPointNum = 50;
