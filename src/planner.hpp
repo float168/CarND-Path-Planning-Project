@@ -209,8 +209,8 @@ inline Cartesian ToCartesian(const T& point,
                              const std::vector<Waypoint>& map_waypoints)
 {
   int prev_index = -1;
-  while (point.s > map_waypoints.at(prev_index + 1).s &&
-         prev_index < (int)(map_waypoints.size() - 1))
+  while (prev_index < (int)(map_waypoints.size() - 1) &&
+         point.s > map_waypoints.at(prev_index + 1).s)
   {
     ++prev_index;
   }
@@ -246,18 +246,41 @@ inline double GetLaneMid(const int i) {
 
 
 class Planner {
-  struct HaveCloseVehicles {
-    bool on_ahead = false;
-    bool on_left  = false;
-    bool on_right = false;
+  struct Condition {
+    struct LaneCond {
+      bool has_close_ahead = false;
+      bool has_close_either = false;
+      double ahead_distance = std::numeric_limits<double>::max();
+    };
+
+    std::array<LaneCond, kLaneNum> lanes;
+  };
+
+  struct Behavior {
+    enum class LaneBehav {
+      STAY,
+      SWITCH,
+      CANCEL_SWITCH,
+    };
+    LaneBehav lane = LaneBehav::STAY;
+
+    int prev_lane_index = -1;
+    int next_lane_index = -1;
+
+    double accel = 0.0;
+  };
+
+  struct State {
+    double speed = 0.0;
   };
 
  public:
   static constexpr unsigned int kBaseMoveTimes = 50; // [/s]
-  static constexpr double kMaxSpeed = 22.2;          // [meter/s]
-  static constexpr double kMaxAccel = 0.06;          // [meter/s^2]
+  static constexpr double kMaxSpeed = 22.0;          // [meter/s]
+  static constexpr double kMaxAccel = 0.05;          // [meter/s^2]
 
-  static constexpr double kCloseDistance = 30.0;
+  static constexpr double kLaneMidError = 0.5;
+  static constexpr double kCloseDistance = 20.0;
   static constexpr std::size_t kPathPointNum = 50;
 
   Planner(const std::vector<Waypoint>& map_waypoints)
@@ -273,37 +296,24 @@ class Planner {
     const std::size_t prev_size = prev_pts.size();
 
     // Check other vehicles closeness
-    HaveCloseVehicles close = CheckVehiclesCloseness(end_pt, vehicles, prev_size);
+    Condition cond = CheckCondition(end_pt, vehicles, prev_size);
 
 #ifdef DEBUG
-    std::cout << "  [close] ahead: " << close.on_ahead
-      << ", left: " << close.on_left
-      << ", right: " << close.on_right
-      << std::endl;
-#endif
-
-    const int lane_index = GetLaneIndex(my_car.d);
-    if (m_intend_lane_index == -1) {
-      m_intend_lane_index = lane_index;
+    std::cout << "  [Cond] ";
+    for (const auto& c : cond.lanes) {
+      std::cout << ", " << c.has_close_ahead
+        << "/" << c.has_close_either
+        << "/" << std::setprecision(3) << c.ahead_distance;
     }
-
-    const double accel = DecideLaneAndAccel(close);
-
-#ifdef DEBUG
-    std::cout << "  [decide] accel: " << accel
-      << ", to lane: " << m_intend_lane_index
-      << std::endl;
+    std::cout << std::endl;
 #endif
+
+    DecideNextBehavior(cond, my_car.d, end_pt.d);
 
     HeadedCartesian ref;
     std::vector<Cartesian> sparse_pts = GenerateSparsePoints(my_car, prev_pts, end_pt, ref);
 
     // Shift to car coordinates
-    for (auto& p : sparse_pts) {
-      const Cartesian shift{p.x - ref.x, p.y - ref.y};
-      p = {shift.x * cos(-ref.theta) - shift.y * sin(-ref.theta),
-           shift.x * sin(-ref.theta) + shift.y * cos(-ref.theta)};
-    }
     const auto sparse_path = CartesianPath::fromCartesianVector(sparse_pts);
 
     tk::spline spline;
@@ -312,7 +322,7 @@ class Planner {
     std::vector<Cartesian> next_pts(kPathPointNum);
     std::copy(prev_pts.begin(), prev_pts.end(), next_pts.begin());
 
-    std::vector<Cartesian> extend_pts = GenerateInterporated(spline, ref, accel, kPathPointNum - prev_size);
+    std::vector<Cartesian> extend_pts = GenerateInterporated(spline, ref, kPathPointNum - prev_size);
     std::copy(extend_pts.begin(), extend_pts.end(), next_pts.begin() + prev_size);
 
     return CartesianPath::fromCartesianVector(next_pts);
@@ -320,66 +330,154 @@ class Planner {
 
  private:
   const std::vector<Waypoint> m_map_waypoints;
-  int m_intend_lane_index = -1;
-  double m_intend_speed = 0.0;
 
-  HaveCloseVehicles
-  CheckVehiclesCloseness(const Frenet& end_pt,
-                         const std::vector<Vehicle>& vehicles,
-                         const std::size_t prev_size) const
+  Behavior m_behavior;
+  State m_state;
+
+  Condition CheckCondition(const Frenet& end_pt,
+                           const std::vector<Vehicle>& vehicles,
+                           const std::size_t prev_size) const
   {
-    const int pred_car_lane_i = GetLaneIndex(end_pt.d);
-    const int pred_car_s = end_pt.s;
+    const double pred_car_s = end_pt.s;
 
-    const double diff_sec = static_cast<double>(prev_size) / kBaseMoveTimes;
+    const double pred_sec = static_cast<double>(prev_size) / kBaseMoveTimes;
 
-    HaveCloseVehicles close;
+    Condition cond;
     for (const auto veh : vehicles) {
-      const double pred_veh_s = veh.s + norm(Cartesian{veh.vx, veh.vy}) * diff_sec;
+      const double pred_veh_s = veh.s + norm(Cartesian{veh.vx, veh.vy}) * pred_sec;
 
       const int veh_lane_i = GetLaneIndex(veh.d);
-      if (veh_lane_i < 0) { continue; }
+      if (veh_lane_i < 0 || veh_lane_i >= kLaneNum) { continue; }
 
       const double diff_s = pred_veh_s - pred_car_s;
-      if (veh_lane_i == pred_car_lane_i) {
-        if (0 < diff_s && diff_s <= kCloseDistance) {
-          close.on_ahead = true;
+
+      auto& lane_cond = cond.lanes.at(veh_lane_i);
+
+      // Only consider other vehicle's lane
+      if (0 <= diff_s) {
+        if (diff_s <= kCloseDistance) {
+          lane_cond.has_close_ahead = true;
+          lane_cond.has_close_either = true;
         }
-      } else if (std::abs(diff_s) <= kCloseDistance) {
-        if (veh_lane_i == pred_car_lane_i - 1) {
-          close.on_left = true;
-        } else if (veh_lane_i == pred_car_lane_i + 1) {
-          close.on_right = true;
+        if (diff_s < lane_cond.ahead_distance) {
+          lane_cond.ahead_distance = diff_s;
         }
+      } else if (-kCloseDistance <= diff_s) {
+        lane_cond.has_close_either = true;
       }
     }
 
-    return close;
+    return cond;
   }
 
-  double DecideLaneAndAccel(const HaveCloseVehicles& close) {
-    double accel = 0.0;
+  void DecideNextBehavior(const Condition& cond,
+                          const double cur_d,
+                          const double pred_d) {
+    const int lane_index = GetLaneIndex(cur_d);
+    const int pred_lane_index = GetLaneIndex(pred_d);
 
-    if (close.on_ahead) {
-      if (m_intend_lane_index > 0 && !close.on_left) {
-        m_intend_lane_index--;
-      } else if (m_intend_lane_index < kLaneNum - 1 && !close.on_right) {
-        m_intend_lane_index++;
-      } else {
-        accel = -kMaxAccel;
-      }
-    } else {
-      if (m_intend_lane_index == 0 && !close.on_right) {
-        m_intend_lane_index++;
-      } else if (m_intend_lane_index == kLaneNum - 1 && !close.on_left) {
-        m_intend_lane_index--;
-      }
-      if (m_intend_speed < kMaxSpeed) {
-        accel = kMaxAccel;
-      }
+    if (m_behavior.prev_lane_index == -1) { m_behavior.prev_lane_index = lane_index; }
+    if (m_behavior.next_lane_index == -1) { m_behavior.next_lane_index = lane_index; }
+
+#ifdef DEBUG
+    std::cout << "  [Behav] cur lane: " << lane_index
+      << ", pred lane: " << pred_lane_index;
+#endif
+
+    if (lane_index < 0) {
+      m_behavior.next_lane_index = 0;
+      m_behavior.accel = kMaxAccel;
+      return;
     }
 
-    return accel;
+    if (lane_index >= kLaneNum) {
+      m_behavior.next_lane_index = kLaneNum - 1;
+      m_behavior.accel = kMaxAccel;
+      return;
+    }
+
+    switch (m_behavior.lane) {
+    case Behavior::LaneBehav::STAY: {
+      const auto lane_cond = cond.lanes.at(lane_index);
+
+      if (lane_cond.has_close_ahead) {
+        auto switch_to_left = [&](){
+          m_behavior.lane = Behavior::LaneBehav::SWITCH;
+          m_behavior.prev_lane_index = lane_index;
+          m_behavior.next_lane_index = lane_index - 1;
+        };
+        auto switch_to_right = [&](){
+          m_behavior.lane = Behavior::LaneBehav::SWITCH;
+          m_behavior.prev_lane_index = lane_index;
+          m_behavior.next_lane_index = lane_index + 1;
+        };
+
+        const bool can_switch_left = lane_index > 0 && !cond.lanes.at(lane_index - 1).has_close_either;
+        const bool can_switch_right = lane_index < kLaneNum - 1 && !cond.lanes.at(lane_index + 1).has_close_either;
+
+        std::cout << " [switchable: " << can_switch_left << can_switch_right << "]";
+
+        if (can_switch_left && can_switch_right) {
+          // Look which lane is preferable
+          const bool prefer_right = cond.lanes.at(lane_index - 1).ahead_distance < cond.lanes.at(lane_index + 1).ahead_distance;
+          if (prefer_right) {
+            switch_to_right();
+          } else {
+            switch_to_left();
+          }
+        } else if (can_switch_right && !can_switch_left) {
+          switch_to_right();
+        } else if (can_switch_left && !can_switch_right) {
+          switch_to_left();
+        } else {
+          // Brake
+          m_behavior.accel = -kMaxAccel;
+        }
+      } else {
+        // Accel
+        if (m_state.speed < kMaxSpeed) {
+          m_behavior.accel = kMaxAccel;
+        }
+      }
+
+      break;
+    }
+
+    case Behavior::LaneBehav::SWITCH: {
+      const auto next_lane_cond = cond.lanes.at(m_behavior.next_lane_index);
+      const auto prev_lane_cond = cond.lanes.at(m_behavior.prev_lane_index);
+
+      const auto next_mid = GetLaneMid(m_behavior.next_lane_index);
+      if (next_mid - kLaneMidError < cur_d && cur_d < next_mid + kLaneMidError) {
+        // End switching
+        m_behavior.lane = Behavior::LaneBehav::STAY;
+        m_behavior.prev_lane_index = m_behavior.next_lane_index;
+      }
+
+      if (next_lane_cond.has_close_ahead) {
+        m_behavior.accel = -kMaxAccel;
+      } else {
+        if (m_state.speed < kMaxSpeed) {
+          m_behavior.accel = kMaxAccel;
+        }
+      }
+
+      break;
+    }
+
+    case Behavior::LaneBehav::CANCEL_SWITCH: {
+      // Maybe use in future
+      break;
+    }
+
+    default:
+      break;
+    }
+#ifdef DEBUG
+    std::cout  << ", next lane: " << m_behavior.next_lane_index
+      << ", prev lane: " << m_behavior.prev_lane_index
+      << ", accel: " << m_behavior.accel << std::endl;
+#endif
   }
 
   std::vector<Cartesian>
@@ -395,8 +493,8 @@ class Planner {
     if (prev_size < 2) {
       const Cartesian prev_car_pos{ref.x - cos(ref.theta),
                                    ref.y - sin(ref.theta)};
-      sparse_pts.push_back(prev_car_pos);
-      sparse_pts.push_back({ref.x, ref.y});
+      sparse_pts.emplace_back(prev_car_pos);
+      sparse_pts.emplace_back(Cartesian{ref.x, ref.y});
     } else {
       const auto cart_end_pt = prev_pts.at(prev_size - 1);
       ref.x = cart_end_pt.x;
@@ -405,16 +503,28 @@ class Planner {
       const auto ref_prev = prev_pts.at(prev_size - 2);
       ref.theta = atan2(ref.y - ref_prev.y, ref.x - ref_prev.x);
 
-      sparse_pts.push_back(ref_prev);
-      sparse_pts.push_back({ref.x, ref.y});
+      const auto ref_c = Cartesian{ref.x, ref.y};
+
+      sparse_pts.emplace_back(ref_prev);
+      if (distance(ref_prev, ref_c) > 1e-6) {
+        sparse_pts.emplace_back(Cartesian{ref.x, ref.y});
+      }
     }
 
     const double s = prev_size > 0 ? end_pt.s : car.s;
 
+    // Add some ahead waypoints
     for (int i = 0; i < 3; ++i) {
-      const Frenet fren_wp{s + (i+1) * 30.0, GetLaneMid(m_intend_lane_index)};
+      const Frenet fren_wp{s + (i+1) * 30.0, GetLaneMid(m_behavior.next_lane_index)};
       const Cartesian cart_wp = ToCartesian(fren_wp, m_map_waypoints);
       sparse_pts.push_back(cart_wp);
+    }
+
+    // Shift and rotate to my car coordinates
+    for (auto& p : sparse_pts) {
+      const Cartesian shift{p.x - ref.x, p.y - ref.y};
+      p = {shift.x * cos(-ref.theta) - shift.y * sin(-ref.theta),
+           shift.x * sin(-ref.theta) + shift.y * cos(-ref.theta)};
     }
 
     return sparse_pts;
@@ -423,7 +533,6 @@ class Planner {
   std::vector<Cartesian>
   GenerateInterporated(tk::spline& spline,
                        const HeadedCartesian& ref,
-                       const double accel,
                        const std::size_t point_num)
   {
     std::vector<Cartesian> points(point_num);
@@ -433,16 +542,11 @@ class Planner {
     const double target_dist = norm(target);
 
     for (std::size_t i = 0; i < point_num; ++i) {
-      m_intend_speed += accel;
-      if (m_intend_speed > kMaxSpeed) { m_intend_speed = kMaxSpeed; }
-      if (m_intend_speed < kMaxAccel) { m_intend_speed = kMaxAccel; }
+      m_state.speed += m_behavior.accel;
+      if (m_state.speed > kMaxSpeed) { m_state.speed = kMaxSpeed; }
+      if (m_state.speed < 0.0) { m_state.speed = 0.0; }
 
-#ifdef DEBUG
-    std::cout << "  [interporate] to speed: " << m_intend_speed
-      << std::endl;
-#endif
-
-      const double N = target_dist / m_intend_speed * kBaseMoveTimes;
+      const double N = target_dist / m_state.speed * kBaseMoveTimes;
 
       const double x = (i+1) * target.x / N;
       const Cartesian p_r = {x, spline(x)};
