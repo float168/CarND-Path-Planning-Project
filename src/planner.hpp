@@ -77,7 +77,7 @@ struct Waypoint {
   double dy;
 };
 
-struct CarState {
+struct MyCar {
   double x;
   double y;
   double s;
@@ -264,7 +264,7 @@ class Planner {
   {}
 
   CartesianPath
-  GenerateNextPathPoints(const CarState& car_state,
+  GenerateNextPathPoints(const MyCar& my_car,
                          const std::vector<Cartesian>& prev_pts,
                          const Frenet& end_pt,
                          const std::vector<Vehicle> vehicles)
@@ -281,7 +281,7 @@ class Planner {
       << std::endl;
 #endif
 
-    const int lane_index = GetLaneIndex(car_state.d);
+    const int lane_index = GetLaneIndex(my_car.d);
     if (m_intend_lane_index == -1) {
       m_intend_lane_index = lane_index;
     }
@@ -295,7 +295,7 @@ class Planner {
 #endif
 
     HeadedCartesian ref;
-    std::vector<Cartesian> sparse_pts = GenerateSparsePoints(car_state, prev_pts, end_pt, ref);
+    std::vector<Cartesian> sparse_pts = GenerateSparsePoints(my_car, prev_pts, end_pt, ref);
 
     // Shift to car coordinates
     for (auto& p : sparse_pts) {
@@ -382,7 +382,7 @@ class Planner {
   }
 
   std::vector<Cartesian>
-  GenerateSparsePoints(const CarState car,
+  GenerateSparsePoints(const MyCar car,
                        const std::vector<Cartesian>& prev_pts,
                        const Frenet& end_pt,
                        HeadedCartesian& ref) const

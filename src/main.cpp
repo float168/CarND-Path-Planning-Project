@@ -97,7 +97,7 @@ int main() {
           double car_d = j[1]["d"];
           double car_yaw = j[1]["yaw"];
           double car_speed = j[1]["speed"];
-          const auto car_state = CarState{car_x, car_y, car_s, car_d, car_yaw, car_speed};
+          const auto my_car = MyCar{car_x, car_y, car_s, car_d, car_yaw, car_speed};
 
           // Previous path data given to the Planner
           auto previous_path_x = j[1]["previous_path_x"];
@@ -121,7 +121,7 @@ int main() {
            *   sequentially every .02 seconds
            */
           const CartesianPath next_vals = planner.GenerateNextPathPoints(
-              car_state, prev_pts, end_pt, vehicles);
+              my_car, prev_pts, end_pt, vehicles);
 
           msgJson["next_x"] = next_vals.x;
           msgJson["next_y"] = next_vals.y;
