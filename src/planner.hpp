@@ -235,12 +235,13 @@ inline Cartesian ToCartesian(const T& point,
 }
 
 inline int GetLaneIndex(const double d) {
-  if (d < 0.0 || d >= kLaneWidth * kLaneNum) { return -1; }
+  if (d < 0.0) { return -1; }
+  if (d >= kLaneWidth * kLaneNum) { return kLaneNum; }
   return static_cast<int>(d / kLaneWidth);
 }
 
 inline double GetLaneMid(const int i) {
-  return i * kLaneWidth + 0.5 * kLaneWidth;
+  return (i + 0.5) * kLaneWidth;
 }
 
 
