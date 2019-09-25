@@ -17,6 +17,8 @@ I also added spline library `spline.h` and path planner code `planner.hpp` to `s
 
 I ran the simulator for 5 miles without incident.
 
+![5 miles screenshot](./asset/5miles.png)
+
 #### The car drives according to the speed limit.
 
 No speed limit exceed message was seen.
